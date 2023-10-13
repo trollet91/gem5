@@ -52,11 +52,17 @@
 #include "debug/Rename.hh"
 #include "params/BaseO3CPU.hh"
 
+
+
+
 namespace gem5
 {
 
 namespace o3
 {
+
+
+
 
 Rename::Rename(CPU *_cpu, const BaseO3CPUParams &params)
     : cpu(_cpu),
@@ -472,11 +478,13 @@ Rename::rename(bool &status_change, ThreadID tid)
         // this cycle.  Tell the previous stages to block.
         if (resumeSerialize) {
             resumeSerialize = false;
+            //TODO-HUAWEI: ?
             block(tid);
             toDecode->renameUnblock[tid] = false;
         }
     } else if (renameStatus[tid] == Unblocking) {
         if (resumeUnblocking) {
+            //TODO-HUAWEI: ?
             block(tid);
             resumeUnblocking = false;
             toDecode->renameUnblock[tid] = false;
@@ -509,6 +517,33 @@ Rename::rename(bool &status_change, ThreadID tid)
 void
 Rename::renameInsts(ThreadID tid)
 {
+
+    if (currBlockingCause != NONE) {
+
+        // Get the number of cycles spent blocking
+        assert(lastBlocking != 0);
+        uint64_t cycles_blocked = cpu->ticksToCycles(curTick() - lastBlocking);
+        lastBlocking = 0;
+
+        // Update the corresponding stat
+        if (currBlockingCause == RF) {
+            stats.cyclesBlockRFFull += cycles_blocked;
+        } else if (currBlockingCause == IQ) {
+            stats.cyclesBlockIQFull += cycles_blocked;
+        } else if (currBlockingCause == ROB) {
+            stats.cyclesBlockROBFull += cycles_blocked;
+        } else if (currBlockingCause == LQ) {
+            stats.cyclesBlockLQFull += cycles_blocked;
+        } else if (currBlockingCause == SQ) {
+            stats.cyclesBlockSQFull += cycles_blocked;
+        } else if (currBlockingCause == MISSING) {
+            stats.cyclesBlockMissingCause += cycles_blocked;
+        } else {
+            panic("Blocking cause not regognized");
+        }
+        currBlockingCause = NONE;
+    }
+
     // Instructions can be either in the skid buffer or the queue of
     // instructions coming from decode, depending on the status.
     int insts_available = renameStatus[tid] == Unblocking ?
@@ -538,6 +573,7 @@ Rename::renameInsts(ThreadID tid)
 
     if (free_iq_entries < min_free_entries) {
         min_free_entries = free_iq_entries;
+
         source = IQ;
     }
 
@@ -551,6 +587,7 @@ Rename::renameInsts(ThreadID tid)
 
         blockThisCycle = true;
 
+        currBlockingCause = source;
         block(tid);
 
         incrFullStat(source);
@@ -663,6 +700,8 @@ Rename::renameInsts(ThreadID tid)
             DPRINTF(Rename,
                     "Blocking due to "
                     " lack of free physical registers to rename to.\n");
+
+            currBlockingCause = RF;
             blockThisCycle = true;
             insts_to_rename.push_front(inst);
             ++stats.fullRegistersEvents;
@@ -751,6 +790,7 @@ Rename::renameInsts(ThreadID tid)
     }
 
     if (blockThisCycle) {
+        currBlockingCause = source;
         block(tid);
         toDecode->renameUnblock[tid] = false;
     }
@@ -861,6 +901,16 @@ Rename::updateStatus()
 bool
 Rename::block(ThreadID tid)
 {
+
+    // This shoudl be an assert
+    // Fine as long as not too much time spent on this state
+    if (currBlockingCause == NONE) {
+        currBlockingCause = MISSING;
+    }
+
+    lastBlocking = curTick();
+
+
     DPRINTF(Rename, "[tid:%i] Blocking.\n", tid);
 
     // Add the current inputs onto the skid buffer, so they can be
@@ -1236,6 +1286,27 @@ Rename::checkStall(ThreadID tid)
     return ret_val;
 }
 
+Rename::FullSource
+Rename::getStallCause(ThreadID tid) {
+    if (stalls[tid].iew) {
+        return MISSING;
+    } else if (calcFreeROBEntries(tid) <= 0) {
+        return ROB;
+    } else if (calcFreeIQEntries(tid) <= 0) {
+        return IQ;
+    } else if (calcFreeLQEntries(tid) <= 0) {
+        return LQ;
+    } else if (calcFreeSQEntries(tid) <= 0) {
+        return SQ;
+    } else if (renameMap[tid]->numFreeEntries() <= 0) {
+        return RF;
+    } else if (renameStatus[tid] == SerializeStall &&
+               (!emptyROB[tid] || instsInProgress[tid])) {
+        return MISSING;
+    }
+    return NONE;
+}
+
 void
 Rename::readFreeEntries(ThreadID tid)
 {
@@ -1299,6 +1370,8 @@ Rename::checkSignalsAndUpdate(ThreadID tid)
     }
 
     if (checkStall(tid)) {
+        currBlockingCause = getStallCause(tid); 
+        assert(currBlockingCause != NONE);
         return block(tid);
     }
 

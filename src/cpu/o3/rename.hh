@@ -468,8 +468,13 @@ class Rename
         IQ,
         LQ,
         SQ,
-        NONE
+        RF,
+        NONE,
+        MISSING
     };
+    FullSource getStallCause(ThreadID tid);
+    FullSource currBlockingCause = NONE;
+    Tick lastBlocking = 0;
 
     /** Function used to increment the stat that corresponds to the source of
      * the stall.
@@ -513,6 +518,14 @@ class Rename
         /** Stat for total number of times that rename runs out of free
          *  registers to use to rename. */
         statistics::Scalar fullRegistersEvents;
+
+        statistics::Scalar cyclesBlockROBFull;
+        statistics::Scalar cyclesBlockRFFull;
+        statistics::Scalar cyclesBlockIQFull;
+        statistics::Scalar cyclesBlockLQFull;
+        statistics::Scalar cyclesBlockSQFull;
+        statistics::Scalar cyclesBlockMissingCause;
+
         /** Stat for total number of renamed destination registers. */
         statistics::Scalar renamedOperands;
         /** Stat for total number of source register rename lookups. */
